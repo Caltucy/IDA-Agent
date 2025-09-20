@@ -28,7 +28,7 @@ pnpm dev
 
 ## 环境变量
 
-在运行项目之前，您需要在项目根目录创建一个 `.env.local` 文件，并填入您的 OpenAI API 密钥等信息：
+在运行项目之前，您需要在项目根目录创建一个 `.env` 文件，并填入您的 OpenAI API 密钥等信息：
 
 ```
 OPENAI_API_KEY=YOUR_API_KEY
