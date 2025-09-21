@@ -40,7 +40,10 @@ export default function Home() {
   return (
     <div className="flex flex-col items-center min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 p-4 sm:p-8">
       <main className="w-full max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold text-center mb-8">数据分析代理</h1>
+        <div className="flex justify-center items-center mb-8">
+          <h1 className="text-4xl font-bold text-center">数据分析代理</h1>
+          <a href="/files" className="ml-4 px-4 py-2 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700">文件管理</a>
+        </div>
 
         <form onSubmit={handleSubmit} className="mb-8">
           <textarea
