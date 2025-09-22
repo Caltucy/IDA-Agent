@@ -1,3 +1,20 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments (optional)
+.venv/
+venv/
+env/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# dotenv (optional)
+.env
+.env.*
 # IDE and OS specific
 .vscode/
 *.swp

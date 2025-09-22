@@ -165,6 +165,17 @@ def react_agent_node(state: AgentState) -> AgentState:
 
 当你有足够信息回答用户问题时，使用final_answer工具。
 \n代码生成要求:\n- 使用 pandas/numpy 等库处理数据时，务必使用 print 打印关键结果。\n- 打印表格/序列前，设置完整显示选项: \n  pandas: display.max_rows=None, display.max_columns=None, display.max_colwidth=None, display.width=None。\n- DataFrame/Series 请优先使用 to_string() 打印完整内容。\n- numpy 如需打印数组，可设置 threshold/edgeitems 放宽显示限制。\n- 如果读取了文件，请使用 state 中提供的路径，避免硬编码其它路径。\n- 确保代码可独立运行，不依赖交互输入。\n"""
+
+    # 追加更严格的分析准则，避免对年份/时间/编号做不必要的统计
+    system_prompt += (
+        "\n分析准则（务必遵守）：\n"
+        "1) 先用 df.head(2)、df.columns、df.dtypes 检查列名与类型，再决定分析方案。\n"
+        "2) 默认不对‘年份/时间/编号类’字段做均值/标准差统计。以下模式视为时间/编号：列名含 year/date/time/日期/时间/年；或纯整数且取值范围像年份（1800-2100）；或列名含 id/code/编号。\n"
+        "   - 对这类列，如需汇总仅给出唯一值个数、最小/最大值或时间范围；除非用户明确要求，否则不要把它们并入整体 describe 结果。\n"
+        "3) 仅对与‘面积/数量/金额/比率/变化’等度量相关的数值列做统计；必要时将可解析文本列转为数值（pd.to_numeric(errors='coerce')）。\n"
+        "4) 猜列名前先打印候选列并说明选择依据，再进行计算。\n"
+        "5) 输出围绕洞见（趋势、异常、对比）；表格过长时先展示示例并在总结中归纳结论。\n"
+    )
     
     # 添加系统消息（使用正确的消息类型）
     messages.insert(0, SystemMessage(content=system_prompt))
