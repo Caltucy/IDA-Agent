@@ -11,7 +11,7 @@
   "dependencies": {
     "@langchain/community": "^0.3.56",
     "@langchain/core": "^0.3.77",
-    "@langchain/langgraph": "^0.4.9",
+    "@langchain/langgraph": "^0.3.0",
     "@langchain/openai": "^0.6.13",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-slot": "^1.2.3",
