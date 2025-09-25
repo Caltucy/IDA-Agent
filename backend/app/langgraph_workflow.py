@@ -282,13 +282,19 @@ def react_agent_node(state: AgentState) -> AgentState:
     except Exception:
         pass
     
-    # 检查是否完成
-    if action and action.strip().lower() == "final_answer":
+    # 检查是否完成或者没有行动（直接回复）
+    if (action and action.strip().lower() == "final_answer") or not action:
         state["is_done"] = True
         
-        # 确保生成最终回复
-        if "answer" in action_input:
+        # 如果是final_answer且有answer字段，使用answer作为回复
+        if action and action.strip().lower() == "final_answer" and "answer" in action_input:
             ai_message = AIMessage(content=action_input["answer"])
+            messages = list(state["messages"])
+            messages.append(ai_message)
+            state["messages"] = messages
+        # 如果没有行动，直接使用LLM的回复作为最终回复
+        elif not action:
+            ai_message = AIMessage(content=response_content)
             messages = list(state["messages"])
             messages.append(ai_message)
             state["messages"] = messages
@@ -382,14 +388,17 @@ def safe_code_executor(code: str, _locals: dict[str, Any]) -> tuple[str, dict[st
                 [sys.executable, code_file],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
+                text=False,  # 改为二进制模式
                 cwd=temp_dir,
                 env=env
             )
             
             # 设置超时时间为30秒
             try:
-                stdout, stderr = process.communicate(timeout=30)
+                stdout_bytes, stderr_bytes = process.communicate(timeout=30)
+                # 使用utf-8解码
+                stdout = stdout_bytes.decode('utf-8', errors='replace')
+                stderr = stderr_bytes.decode('utf-8', errors='replace')
                 execution_result = stdout
                 if stderr:
                     execution_result += f"\n错误输出:\n{stderr}"
@@ -546,10 +555,35 @@ def create_codeact_workflow(llm):
     # 编译工作流（不使用checkpointer）
     return code_act.compile()
 
-def process_query(instruction: str, file_path: Optional[str] = None) -> Dict:
+def process_query(instruction: str, file_path: Optional[str] = None, history_messages: Optional[List[Dict]] = None) -> Dict:
     """处理用户查询：理解需求→生成/执行代码→基于结果回答（ReAct 回路）"""
     # 初始化对话消息
     messages: List[BaseMessage] = []
+
+    # 将历史消息添加到对话中
+    if history_messages and len(history_messages) > 0:
+        # 将历史消息转换为LangChain消息格式
+        for msg in history_messages:
+            # 回收文件路径：优先使用助手消息返回的真实本地路径
+            candidate_path = msg.get("filePath")
+            if (not file_path) and candidate_path:
+                # 过滤掉浏览器的 blob: URL 或非本地绝对路径，避免错误路径污染
+                is_blob_url = isinstance(candidate_path, str) and candidate_path.startswith("blob:")
+                is_http_url = isinstance(candidate_path, str) and (candidate_path.startswith("http://") or candidate_path.startswith("https://"))
+                looks_local = isinstance(candidate_path, str) and (os.path.isabs(candidate_path) and os.path.exists(candidate_path))
+                if looks_local and (not is_blob_url) and (not is_http_url):
+                    file_path = candidate_path
+                    logger.info(f"从历史消息回收本地文件路径: {file_path}")
+                else:
+                    # 忽略非本地/无效路径
+                    pass
+
+            if msg.get("role") == "user":
+                messages.append(HumanMessage(content=msg.get("content", "")))
+            elif msg.get("role") == "assistant":
+                messages.append(AIMessage(content=msg.get("content", "")))
+            elif msg.get("role") == "system":
+                messages.append(SystemMessage(content=msg.get("content", "")))
 
     # 将文件上下文注入为系统消息，便于模型感知
     file_content: Optional[str] = None
@@ -563,10 +597,9 @@ def process_query(instruction: str, file_path: Optional[str] = None) -> Dict:
                 f"你有一个文件需要处理:\n"
                 f"文件名: {file_name}\n"
                 f"文件类型: {file_type}\n"
-                f"文件路径: {file_path}\n\n"
-                f"如果需要读取，请使用工具读取文件内容并进行分析。")
+                f"文件路径: {file_path}")
             messages.append(SystemMessage(content=system_message))
-            logger.info(f"成功添加文件信息到系统消息: {file_name}")
+            logger.info(f"成功添加文件信息到系统消息: {file_path}")
         except Exception as e:
             logger.error(f"处理文件时出错: {str(e)}")
 
@@ -663,6 +696,7 @@ def process_query(instruction: str, file_path: Optional[str] = None) -> Dict:
             "final_answer": final_answer_val,
             "intermediate_steps": intermediate_steps,
             "execution_result": state.get("execution_result"),
+            "file_path": state.get("file_path"),
         }
     except Exception as e:
         logger.error(f"处理查询失败: {e}")

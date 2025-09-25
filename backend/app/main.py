@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import os
+import json
 from typing import Optional
 import tempfile
 from .langgraph_workflow import process_query
@@ -24,9 +25,18 @@ async def root():
 @app.post("/api/process")
 async def process_request(
     instruction: str = Form(...),
-    file: Optional[UploadFile] = File(None)
+    file: Optional[UploadFile] = File(None),
+    messages_json: Optional[str] = Form(None)
 ):
     file_path = None
+    messages = []
+    
+    # 解析消息历史
+    if messages_json:
+        try:
+            messages = json.loads(messages_json)
+        except Exception as e:
+            return {"error": f"解析消息历史错误: {str(e)}"}
     
     # 如果上传了文件，保存到项目 data/ 目录
     if file:
@@ -52,7 +62,7 @@ async def process_request(
     
     # 调用LangGraph工作流处理请求
     try:
-        result = process_query(instruction, file_path)
+        result = process_query(instruction, file_path, messages)
         
         return result
     except Exception as e:
