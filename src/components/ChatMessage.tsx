@@ -4,7 +4,7 @@ interface ChatMessageProps {
   message: {
     role: 'user' | 'assistant';
     content: string;
-    timestamp: Date;
+    timestamp: Date | string | number;
     code?: string;
     execution_result?: string;
   };
@@ -12,6 +12,7 @@ interface ChatMessageProps {
 
 export default function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === 'user';
+  const date = message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp);
   
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
@@ -31,7 +32,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             {isUser ? '你' : 'AI'}
           </div>
           <span className="text-sm opacity-75">
-            {message.timestamp.toLocaleTimeString()}
+            {isNaN(date.getTime()) ? '' : date.toLocaleTimeString()}
           </span>
         </div>
         

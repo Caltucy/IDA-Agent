@@ -54,7 +54,7 @@ export default function Home() {
           <h1 className="text-3xl sm:text-4xl font-bold text-center">数据分析代理</h1>
         </div>
         {selectedId ? (
-          <ChatInterface sessionId={selectedId} />
+          <ChatInterface key={selectedId} sessionId={selectedId} />
         ) : (
           <div className="w-full max-w-3xl mx-auto h-[80vh] flex items-center justify-center text-gray-500">
             在左侧点击“新建”开始一个新的对话
