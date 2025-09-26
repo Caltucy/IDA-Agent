@@ -6,6 +6,7 @@ import { mkdir } from 'fs/promises';
 
 // Python后端API地址
 const PYTHON_API_URL = 'http://localhost:8000/api/process';
+const PYTHON_STREAM_API_URL = 'http://localhost:8000/api/process-stream';
 
 export async function POST(req: NextRequest) {
   try {
@@ -13,6 +14,7 @@ export async function POST(req: NextRequest) {
     const instruction = formData.get('instruction') as string;
     const file = formData.get('file') as File | null;
     const messagesJson = formData.get('messages_json') as string | null;
+    const useStream = formData.get('use_stream') as string | null;
     
     if (!instruction) {
       return NextResponse.json({ error: '指令不能为空' }, { status: 400 });
@@ -32,8 +34,11 @@ export async function POST(req: NextRequest) {
       newFormData.append('file', file);
     }
     
+    // 选择API端点
+    const apiUrl = useStream === 'true' ? PYTHON_STREAM_API_URL : PYTHON_API_URL;
+    
     // 发送请求到Python后端
-    const response = await fetch(PYTHON_API_URL, {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       body: newFormData,
     });
@@ -41,6 +46,17 @@ export async function POST(req: NextRequest) {
     if (!response.ok) {
       const errorText = await response.text();
       return NextResponse.json({ error: `Python后端错误: ${errorText}` }, { status: response.status });
+    }
+    
+    // 如果是流式请求，直接返回流
+    if (useStream === 'true') {
+      return new NextResponse(response.body, {
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
     }
     
     const data = await response.json();

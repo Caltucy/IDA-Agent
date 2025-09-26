@@ -3,6 +3,14 @@
 import { useState, useRef, useEffect } from "react";
 import ChatMessage from "./ChatMessage";
 import { storageQueue } from "../lib/storageQueue";
+import { ChatMessage as ChatMessageType, StreamingStep } from "../types";
+
+interface ThoughtStep {
+  thought: string;
+  action: string;
+  action_input: any;
+  observation: string;
+}
 
 interface Message {
   role: 'user' | 'assistant';
@@ -12,6 +20,7 @@ interface Message {
   execution_result?: string;
   filePath?: string;
   fileName?: string;
+  thoughtSteps?: ThoughtStep[];
 }
 
 interface ChatInterfaceProps {
@@ -20,10 +29,11 @@ interface ChatInterfaceProps {
 }
 
 export default function ChatInterface({ initialMessages = [], sessionId }: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messages, setMessages] = useState<ChatMessageType[]>(initialMessages);
   const [input, setInput] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [useStreaming, setUseStreaming] = useState(true); // 默认启用流式处理
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasLoadedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -199,11 +209,11 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
     const targetSessionId = sessionId; // 绑定此次请求的会话ID
 
     // 添加用户消息
-    const userMessage: Message = {
+    const userMessage: ChatMessageType = {
       role: 'user',
       content: input,
       timestamp: new Date(),
-      fileName: file?.name, // 保存文件名
+      fileName: file?.name,
       filePath: file ? URL.createObjectURL(file) : undefined
     };
     
@@ -214,10 +224,9 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
     try {
       const formData = new FormData();
       formData.append("instruction", input);
+      formData.append("use_stream", useStreaming.toString());
       
       // 添加消息历史记录到请求中
-      // 只发送最近的10条消息，避免请求过大
-      // 确保包含当前用户刚刚输入的消息
       const allMessages = [...messages, userMessage];
       const recentMessages = allMessages.slice(-10).map(msg => ({
         role: msg.role,
@@ -225,7 +234,8 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
         fileName: msg.fileName,
         filePath: msg.filePath,
         code: msg.code,
-        execution_result: msg.execution_result
+        execution_result: msg.execution_result,
+        thoughtSteps: msg.thoughtSteps
       }));
       formData.append("messages_json", JSON.stringify(recentMessages));
       
@@ -241,77 +251,132 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const response = await fetch("/api/process", {
-        method: "POST",
-        body: formData,
-        signal: controller.signal,
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "请求处理失败");
-      }
-      
-      const result = await response.json();
-      
-      // 添加AI回复消息
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: result.response,
-        timestamp: new Date(),
-        code: result.code,
-        execution_result: result.execution_result,
-        filePath: result.filePath // 保存文件路径
-      };
-      
-      // 仅当当前仍停留在本次发送的会话中才追加到UI
-      if (sessionId === targetSessionId) {
-        setMessages(prev => [...prev, assistantMessage]);
+      if (useStreaming) {
+        // 流式处理
+        const response = await fetch("/api/process", {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        });
+        
+        if (!response.ok) {
+          throw new Error("请求处理失败");
+        }
+
+        // 创建流式消息
+        const streamingMessage: ChatMessageType = {
+          role: 'assistant',
+          content: '',
+          timestamp: new Date(),
+          isStreaming: true,
+          streamingSteps: []
+        };
+
+        // 立即添加到消息列表
+        setMessages(prev => [...prev, streamingMessage]);
+
+        // 处理流式数据
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+                if (data === '[DONE]') {
+                  // 流结束
+                  setMessages(prev => prev.map((msg, index) => 
+                    index === prev.length - 1 && msg.isStreaming 
+                      ? { ...msg, isStreaming: false }
+                      : msg
+                  ));
+                  break;
+                }
+
+                try {
+                  const stepData: StreamingStep = JSON.parse(data);
+                  
+                  // 更新流式消息
+                  setMessages(prev => prev.map((msg, index) => {
+                    if (index === prev.length - 1 && msg.isStreaming) {
+                      const updatedSteps = [...(msg.streamingSteps || []), stepData];
+                      
+                      // 根据步骤类型更新消息内容
+                      let updatedContent = msg.content;
+                      if (stepData.type === 'final_answer' || stepData.type === 'final_response') {
+                        updatedContent = stepData.content || '';
+                      }
+
+                      return {
+                        ...msg,
+                        content: updatedContent,
+                        streamingSteps: updatedSteps,
+                        code: stepData.code || msg.code,
+                        execution_result: stepData.result || msg.execution_result
+                      };
+                    }
+                    return msg;
+                  }));
+                } catch (e) {
+                  console.error('解析流式数据失败:', e);
+                }
+              }
+            }
+          }
+        }
       } else {
-        // 已切换会话：把回复写回原会话的本地存储，供返回时显示
-        try {
-          const key = `chatMessages:${targetSessionId}`;
-          // 使用队列机制安全地读取和更新消息
-          const savedMessages = storageQueue.getItem(key) || [];
-          const list = Array.isArray(savedMessages) ? savedMessages : [];
-          const merged = [...list, assistantMessage];
-          // 使用队列机制保存消息，避免并发问题
-          storageQueue.enqueue(key, merged)
-            .catch(err => console.error('Failed to save messages to original session:', err));
-        } catch {}
+        // 非流式处理（原有逻辑）
+        const response = await fetch("/api/process", {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "请求处理失败");
+        }
+        
+        const result = await response.json();
+        
+        const assistantMessage: ChatMessageType = {
+          role: 'assistant',
+          content: result.response,
+          timestamp: new Date(),
+          code: result.code,
+          execution_result: result.execution_result,
+          filePath: result.filePath,
+          thoughtSteps: result.intermediate_steps
+        };
+        
+        if (sessionId === targetSessionId) {
+          setMessages(prev => [...prev, assistantMessage]);
+        }
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') {
-        // 已被中止：无需提示错误，也不追加消息
         return;
       }
-      // 添加错误消息
-      const errorMessage: Message = {
+      const errorMessage: ChatMessageType = {
         role: 'assistant',
         content: `处理请求时出错: ${err.message || "未知错误"}`,
         timestamp: new Date()
       };
       if (sessionId === targetSessionId) {
         setMessages(prev => [...prev, errorMessage]);
-      } else {
-        try {
-          const key = `chatMessages:${targetSessionId}`;
-          // 使用队列机制安全地读取和更新错误消息
-          const savedMessages = storageQueue.getItem(key) || [];
-          const list = Array.isArray(savedMessages) ? savedMessages : [];
-          const merged = [...list, errorMessage];
-          // 使用队列机制保存消息，避免并发问题
-          storageQueue.enqueue(key, merged)
-            .catch(err => console.error('Failed to save error message to original session:', err));
-        } catch {}
       }
       console.error("Error:", err);
     } finally {
-      // 仅当仍在原会话中时复位 loading
       if (sessionId === targetSessionId) {
         setLoading(false);
       }
-      // 清理控制器
       if (abortRef.current) {
         abortRef.current = null;
       }
@@ -328,7 +393,6 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
           </div>
         ) : (
           <>
-            {/* 清空按钮已移除，使用侧边栏删除会话 */}
             {messages.map((msg, index) => (
               <ChatMessage key={index} message={msg} />
             ))}
@@ -363,6 +427,19 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
               </button>
             </span>
           )}
+          
+          {/* 流式处理开关 */}
+          <div className="ml-auto flex items-center">
+            <label className="text-sm text-gray-600 dark:text-gray-300 mr-2">
+              实时显示思考过程
+            </label>
+            <input
+              type="checkbox"
+              checked={useStreaming}
+              onChange={(e) => setUseStreaming(e.target.checked)}
+              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+            />
+          </div>
         </div>
         
         <div className="flex">
