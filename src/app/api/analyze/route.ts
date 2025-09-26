@@ -57,12 +57,20 @@ export async function POST(req: NextRequest) {
     const responseContent = completion.choices[0].message.content;
 
     if (!responseContent) {
-      return new Response("No content received from OpenAI", { status: 500 });
+      return NextResponse.json({ error: "No content received from OpenAI" }, { status: 500 });
     }
 
-    return new Response(responseContent, {
-      headers: { "Content-Type": "text/plain" },
-    });
+    try {
+      // 尝试解析JSON响应
+      const parsedResponse = JSON.parse(responseContent);
+      return NextResponse.json(parsedResponse);
+    } catch (parseError) {
+      // 如果不是有效的JSON，返回原始文本作为报告
+      return NextResponse.json({
+        report: responseContent,
+        charts: []
+      });
+    }
   } catch (error) {
     console.error('Error calling OpenAI API:', error);
     if (error instanceof Error) {

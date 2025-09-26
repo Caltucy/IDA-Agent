@@ -1,45 +1,36 @@
-// 思考步骤类型
-export interface ThoughtStep {
-  thought: string;
-  action: string;
-  action_input: any;
-  observation: string;
+export interface Chart {
+  type: 'bar' | 'line';
+  title?: string;
+  data: {
+    labels: string[];
+    values: number[];
+    seriesName?: string;
+  };
 }
 
-// 聊天消息类型
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: Date;
-  code?: string;
-  execution_result?: string;
-  filePath?: string;
-  fileName?: string;
-  thoughtSteps?: ThoughtStep[]; // 添加思考步骤
-  isStreaming?: boolean; // 标识是否为流式消息
-  streamingSteps?: StreamingStep[]; // 流式步骤数据
-}
-
-// 流式步骤类型
-export interface StreamingStep {
-  step: number;
-  type: 'step_start' | 'thought' | 'action' | 'code_execution_start' | 'code_execution_result' | 'observation' | 'final_answer' | 'final_response' | 'error';
-  content?: string;
+export interface AnalysisStep {
+  step_id?: string;
+  thought?: string;
   action?: string;
   action_input?: any;
-  result?: string;
+  observation?: string;
   code?: string;
-  message?: string;
-  intermediate_steps?: ThoughtStep[];
   execution_result?: string;
-  file_path?: string;
+  timestamp?: string;
+  status?: 'pending' | 'running' | 'completed' | 'error';
 }
 
-// API响应类型
-export interface ApiResponse {
-  response: string;
+export interface AnalysisResponse {
+  response?: string;
+  report?: string;
+  final_answer?: string;
+  charts?: Chart[];
   code?: string;
   execution_result?: string;
-  filePath?: string;
-  intermediate_steps?: ThoughtStep[]; // 添加思考步骤
+  intermediate_steps?: AnalysisStep[];
+}
+
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
 }
