@@ -282,19 +282,13 @@ def react_agent_node(state: AgentState) -> AgentState:
     except Exception:
         pass
     
-    # 检查是否完成或者没有行动（直接回复）
-    if (action and action.strip().lower() == "final_answer") or not action:
+    # 检查是否完成
+    if action and action.strip().lower() == "final_answer":
         state["is_done"] = True
         
-        # 如果是final_answer且有answer字段，使用answer作为回复
-        if action and action.strip().lower() == "final_answer" and "answer" in action_input:
+        # 确保生成最终回复
+        if "answer" in action_input:
             ai_message = AIMessage(content=action_input["answer"])
-            messages = list(state["messages"])
-            messages.append(ai_message)
-            state["messages"] = messages
-        # 如果没有行动，直接使用LLM的回复作为最终回复
-        elif not action:
-            ai_message = AIMessage(content=response_content)
             messages = list(state["messages"])
             messages.append(ai_message)
             state["messages"] = messages
@@ -388,17 +382,14 @@ def safe_code_executor(code: str, _locals: dict[str, Any]) -> tuple[str, dict[st
                 [sys.executable, code_file],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=False,  # 改为二进制模式
+                text=True,
                 cwd=temp_dir,
                 env=env
             )
             
             # 设置超时时间为30秒
             try:
-                stdout_bytes, stderr_bytes = process.communicate(timeout=30)
-                # 使用utf-8解码
-                stdout = stdout_bytes.decode('utf-8', errors='replace')
-                stderr = stderr_bytes.decode('utf-8', errors='replace')
+                stdout, stderr = process.communicate(timeout=30)
                 execution_result = stdout
                 if stderr:
                     execution_result += f"\n错误输出:\n{stderr}"
@@ -555,223 +546,10 @@ def create_codeact_workflow(llm):
     # 编译工作流（不使用checkpointer）
     return code_act.compile()
 
-async def process_query_streaming(instruction: str, file_path: Optional[str] = None, history_messages: Optional[List[Dict]] = None):
-    """流式处理用户查询，实时返回每一步的思考过程"""
-    import asyncio
-    from typing import AsyncGenerator
-    
-    # 初始化对话消息
-    messages: List[BaseMessage] = []
-
-    # 将历史消息添加到对话中
-    if history_messages and len(history_messages) > 0:
-        for msg in history_messages:
-            candidate_path = msg.get("filePath")
-            if (not file_path) and candidate_path:
-                is_blob_url = isinstance(candidate_path, str) and candidate_path.startswith("blob:")
-                is_http_url = isinstance(candidate_path, str) and (candidate_path.startswith("http://") or candidate_path.startswith("https://"))
-                looks_local = isinstance(candidate_path, str) and (os.path.isabs(candidate_path) and os.path.exists(candidate_path))
-                if looks_local and (not is_blob_url) and (not is_http_url):
-                    file_path = candidate_path
-                    logger.info(f"从历史消息回收本地文件路径: {file_path}")
-
-            if msg.get("role") == "user":
-                messages.append(HumanMessage(content=msg.get("content", "")))
-            elif msg.get("role") == "assistant":
-                messages.append(AIMessage(content=msg.get("content", "")))
-            elif msg.get("role") == "system":
-                messages.append(SystemMessage(content=msg.get("content", "")))
-
-    # 将文件上下文注入为系统消息
-    if file_path and os.path.exists(file_path):
-        try:
-            file_name = os.path.basename(file_path)
-            file_type = detect_file_type(file_path)
-            system_message = (
-                f"你有一个文件需要处理:\n"
-                f"文件名: {file_name}\n"
-                f"文件类型: {file_type}\n"
-                f"文件路径: {file_path}")
-            messages.append(SystemMessage(content=system_message))
-            logger.info(f"成功添加文件信息到系统消息: {file_path}")
-        except Exception as e:
-            logger.error(f"处理文件时出错: {str(e)}")
-
-    # 添加用户消息
-    messages.append(HumanMessage(content=instruction))
-
-    # 初始化状态
-    state: AgentState = {
-        "messages": messages,
-        "file_path": file_path,
-        "file_content": None,
-        "file_type": detect_file_type(file_path) if file_path and os.path.exists(file_path) else None,
-        "code_to_execute": None,
-        "execution_result": None,
-        "intermediate_steps": [],
-        "current_step": 0,
-        "max_iterations": 10,
-        "action": None,
-        "action_input": None,
-        "observation": None,
-        "is_done": False,
-    }
-
-    try:
-        # 迭代式 ReAct 回路，每一步都流式返回
-        for iteration in range(state.get("max_iterations", 5)):
-            # 发送步骤开始信号
-            yield {
-                "type": "step_start",
-                "step": iteration + 1,
-                "message": f"🤔 开始第 {iteration + 1} 步思考..."
-            }
-
-            # 1) 让 Agent 分析并给出"思考/行动/行动输入"
-            state = react_agent_node(state)
-            
-            # 获取当前步骤信息
-            current_step = state.get("intermediate_steps", [])[-1] if state.get("intermediate_steps") else {}
-            thought = current_step.get("thought", "")
-            action = current_step.get("action", "")
-            action_input = current_step.get("action_input", {})
-
-            # 流式返回思考过程
-            if thought:
-                yield {
-                    "type": "thought",
-                    "step": iteration + 1,
-                    "content": thought
-                }
-
-            # 流式返回行动
-            if action:
-                yield {
-                    "type": "action",
-                    "step": iteration + 1,
-                    "action": action,
-                    "action_input": action_input
-                }
-
-            action_text = (state.get("action") or "").lower().strip()
-            normalized_action = re.sub(r"[^a-z_]+", "", action_text)
-
-            # 2) 根据行动执行
-            if not action_text:
-                continue
-
-            # 2.1) 最终回答
-            if (normalized_action == "final_answer") or ("final_answer" in action_text):
-                state = final_answer_node(state)
-                
-                # 流式返回最终答案
-                final_answer = state.get("final_answer") or ""
-                if final_answer:
-                    yield {
-                        "type": "final_answer",
-                        "step": iteration + 1,
-                        "content": final_answer
-                    }
-                break
-
-            # 2.2) 生成并/或执行代码
-            if ("执行代码" in action_text) or (normalized_action in ("execute_code", "generate_code")) or ("execute_code" in action_text) or ("generate_code" in action_text):
-                # 流式显示代码执行开始
-                code = action_input.get("code") if isinstance(action_input, dict) else None
-                if code:
-                    state["code_to_execute"] = code
-                    yield {
-                        "type": "code_execution_start",
-                        "step": iteration + 1,
-                        "code": code
-                    }
-                
-                # 执行代码
-                state = execute_code_node(state)
-                
-                # 流式返回执行结果
-                execution_result = state.get("execution_result") or "(无输出)"
-                yield {
-                    "type": "code_execution_result",
-                    "step": iteration + 1,
-                    "result": execution_result
-                }
-
-                # 更新观察结果
-                if state.get("intermediate_steps") and len(state["intermediate_steps"]) > 0:
-                    state["intermediate_steps"][-1]["observation"] = execution_result
-
-                # 流式返回观察
-                yield {
-                    "type": "observation",
-                    "step": iteration + 1,
-                    "content": execution_result
-                }
-
-                # 将执行结果反馈为"观察"，继续下一轮对话
-                state_messages = list(state["messages"])
-                state_messages.append(HumanMessage(content=f"观察:\n{execution_result}\n\n请根据观察更新你的计划或给出最终答案。"))
-                state["messages"] = state_messages
-                continue
-
-            # 其他动作，直接继续下一轮
-            continue
-
-        # 如果没有最终答案，生成一个总结
-        if not state.get("final_answer"):
-            messages_out: List[BaseMessage] = state.get("messages", [])
-            ai_messages = [m for m in messages_out if isinstance(m, AIMessage)]
-            response_text = ai_messages[-1].content if ai_messages else f"收到指令：'{instruction}'。"
-            
-            if state.get("execution_result"):
-                if not response_text.endswith("\n"):
-                    response_text += "\n\n"
-                response_text += f"代码执行结果：\n\n{state.get('execution_result')}"
-
-            yield {
-                "type": "final_response",
-                "content": response_text,
-                "intermediate_steps": state.get("intermediate_steps", []),
-                "execution_result": state.get("execution_result"),
-                "file_path": state.get("file_path")
-            }
-
-    except Exception as e:
-        logger.error(f"流式处理查询失败: {e}")
-        yield {
-            "type": "error",
-            "message": f"处理失败: {str(e)}"
-        }
-
-def process_query(instruction: str, file_path: Optional[str] = None, history_messages: Optional[List[Dict]] = None) -> Dict:
+def process_query(instruction: str, file_path: Optional[str] = None) -> Dict:
     """处理用户查询：理解需求→生成/执行代码→基于结果回答（ReAct 回路）"""
     # 初始化对话消息
     messages: List[BaseMessage] = []
-
-    # 将历史消息添加到对话中
-    if history_messages and len(history_messages) > 0:
-        # 将历史消息转换为LangChain消息格式
-        for msg in history_messages:
-            # 回收文件路径：优先使用助手消息返回的真实本地路径
-            candidate_path = msg.get("filePath")
-            if (not file_path) and candidate_path:
-                # 过滤掉浏览器的 blob: URL 或非本地绝对路径，避免错误路径污染
-                is_blob_url = isinstance(candidate_path, str) and candidate_path.startswith("blob:")
-                is_http_url = isinstance(candidate_path, str) and (candidate_path.startswith("http://") or candidate_path.startswith("https://"))
-                looks_local = isinstance(candidate_path, str) and (os.path.isabs(candidate_path) and os.path.exists(candidate_path))
-                if looks_local and (not is_blob_url) and (not is_http_url):
-                    file_path = candidate_path
-                    logger.info(f"从历史消息回收本地文件路径: {file_path}")
-                else:
-                    # 忽略非本地/无效路径
-                    pass
-
-            if msg.get("role") == "user":
-                messages.append(HumanMessage(content=msg.get("content", "")))
-            elif msg.get("role") == "assistant":
-                messages.append(AIMessage(content=msg.get("content", "")))
-            elif msg.get("role") == "system":
-                messages.append(SystemMessage(content=msg.get("content", "")))
 
     # 将文件上下文注入为系统消息，便于模型感知
     file_content: Optional[str] = None
@@ -785,9 +563,10 @@ def process_query(instruction: str, file_path: Optional[str] = None, history_mes
                 f"你有一个文件需要处理:\n"
                 f"文件名: {file_name}\n"
                 f"文件类型: {file_type}\n"
-                f"文件路径: {file_path}")
+                f"文件路径: {file_path}\n\n"
+                f"如果需要读取，请使用工具读取文件内容并进行分析。")
             messages.append(SystemMessage(content=system_message))
-            logger.info(f"成功添加文件信息到系统消息: {file_path}")
+            logger.info(f"成功添加文件信息到系统消息: {file_name}")
         except Exception as e:
             logger.error(f"处理文件时出错: {str(e)}")
 
@@ -804,7 +583,7 @@ def process_query(instruction: str, file_path: Optional[str] = None, history_mes
         "execution_result": None,
         "intermediate_steps": [],
         "current_step": 0,
-        "max_iterations": 10,
+        "max_iterations": 5,
         "action": None,
         "action_input": None,
         "observation": None,
@@ -814,7 +593,7 @@ def process_query(instruction: str, file_path: Optional[str] = None, history_mes
     try:
         # 迭代式 ReAct 回路
         for _ in range(state.get("max_iterations", 5)):
-            # 1) 让 Agent 分析并给出"思考/行动/行动输入"
+            # 1) 让 Agent 分析并给出“思考/行动/行动输入”
             state = react_agent_node(state)
 
             action_text = (state.get("action") or "").lower().strip()
@@ -831,7 +610,7 @@ def process_query(instruction: str, file_path: Optional[str] = None, history_mes
                 state = final_answer_node(state)
                 break
 
-            # 2.2) 生成并/或执行代码（中文"执行代码"或英文 execute_code）
+            # 2.2) 生成并/或执行代码（中文“执行代码”或英文 execute_code）
             if ("执行代码" in action_text) or (normalized_action in ("execute_code", "generate_code")) or ("execute_code" in action_text) or ("generate_code" in action_text):
                 # 如果上一步从 LLM 提取到了代码，放入待执行
                 action_input = state.get("action_input") or {}
@@ -841,7 +620,7 @@ def process_query(instruction: str, file_path: Optional[str] = None, history_mes
                 # 执行代码
                 state = execute_code_node(state)
 
-                # 将执行结果反馈为"观察"，继续下一轮对话
+                # 将执行结果反馈为“观察”，继续下一轮对话
                 observation_text = state.get("execution_result") or "(无输出)"
                 state_messages = list(state["messages"])  # type: ignore
                 state_messages.append(HumanMessage(content=f"观察:\n{observation_text}\n\n请根据观察更新你的计划或给出最终答案。"))
@@ -884,7 +663,6 @@ def process_query(instruction: str, file_path: Optional[str] = None, history_mes
             "final_answer": final_answer_val,
             "intermediate_steps": intermediate_steps,
             "execution_result": state.get("execution_result"),
-            "file_path": state.get("file_path"),
         }
     except Exception as e:
         logger.error(f"处理查询失败: {e}")
