@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { AnalysisResponse } from "../types";
 
 interface FileUploadFormProps {
-  onSubmit: (response: any) => void;
+  onSubmit: (response: AnalysisResponse) => void;
 }
 
 export default function FileUploadForm({ onSubmit }: FileUploadFormProps) {
@@ -15,17 +16,12 @@ export default function FileUploadForm({ onSubmit }: FileUploadFormProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!instruction.trim()) {
-      setError("请输入指令");
-      return;
-    }
-    
     setLoading(true);
     setError("");
     
     try {
       const formData = new FormData();
-      formData.append("instruction", instruction);
+      formData.append("instruction", instruction || "请分析这个文件并生成相关报告");
       
       if (file) {
         formData.append("file", file);
@@ -71,6 +67,7 @@ export default function FileUploadForm({ onSubmit }: FileUploadFormProps) {
             id="file"
             onChange={(e) => setFile(e.target.files?.[0] || null)}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md"
+            disabled={loading}
           />
         </div>
         
@@ -82,9 +79,9 @@ export default function FileUploadForm({ onSubmit }: FileUploadFormProps) {
             id="instruction"
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
-            placeholder="请输入您的指令，例如：分析这个CSV文件并生成图表"
+            placeholder="请输入您的指令，例如：分析这个CSV文件并生成图表。如果不填写，将使用默认分析指令。"
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md h-32"
-            required
+            disabled={loading}
           />
         </div>
         
@@ -95,7 +92,7 @@ export default function FileUploadForm({ onSubmit }: FileUploadFormProps) {
             loading ? "bg-blue-400" : "bg-blue-600 hover:bg-blue-700"
           }`}
         >
-          {loading ? "处理中..." : "提交"}
+          {loading ? "处理中..." : "开始分析"}
         </button>
       </form>
     </div>
