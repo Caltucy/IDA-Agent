@@ -5,9 +5,11 @@ import { ChatMessage as ChatMessageType, StreamingStep } from "../types";
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  userAvatarUrl?: string | null;
+  onUserAvatarChange?: (dataUrl: string) => void;
 }
 
-export default function ChatMessage({ message }: ChatMessageProps) {
+export default function ChatMessage({ message, userAvatarUrl, onUserAvatarChange }: ChatMessageProps) {
   const [showThoughts, setShowThoughts] = useState(false);
   const [showStreamingSteps, setShowStreamingSteps] = useState(true);
   const isUser = message.role === 'user';
@@ -101,32 +103,34 @@ export default function ChatMessage({ message }: ChatMessageProps) {
   
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4`}>
-      <div 
-        className={`max-w-[80%] rounded-lg p-4 ${
-          isUser 
-            ? 'bg-blue-500 text-white rounded-br-none' 
-            : 'bg-gray-200 dark:bg-gray-700 rounded-bl-none'
+      {/* 头像 */}
+      {!isUser && (
+        <img
+          src={'/OpenAI%20New%20Blossom.svg'}
+          alt="AI"
+          className="w-9 h-9 rounded-full mr-3 bg-purple-100 p-1 shadow-sm"
+        />
+      )}
+      <div
+        className={`max-w-[75%] rounded-2xl px-4 py-3 shadow ${
+          isUser
+            ? 'bg-purple-600 text-white'
+            : 'bg-purple-50 text-gray-900 dark:bg-gray-800 dark:text-gray-100'
         }`}
       >
-        <div className="flex items-center mb-2">
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center mr-2 ${
-            isUser 
-              ? 'bg-blue-600' 
-              : 'bg-purple-600 text-white'
-          }`}>
-            {isUser ? '你' : 'AI'}
-          </div>
-          <span className="text-sm opacity-75">
+        {/* 时间与状态 */}
+        <div className="flex items-center mb-1">
+          <span className={`text-[11px] ${isUser ? 'text-white/80' : 'text-purple-500 dark:text-purple-300'}`}>
             {isNaN(date.getTime()) ? '' : date.toLocaleTimeString()}
           </span>
           {message.isStreaming && (
-            <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+            <span className="ml-2 text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded dark:bg-purple-900/30 dark:text-purple-200">
               实时思考中...
             </span>
           )}
         </div>
-        
-        <div className="whitespace-pre-wrap">{message.content}</div>
+
+        <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
         
         {/* 流式思考步骤 */}
         {!isUser && message.streamingSteps && message.streamingSteps.length > 0 && (
@@ -239,6 +243,34 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           </div>
         )}
       </div>
+      {isUser && (
+        <label className="ml-3 cursor-pointer" title="点击更换头像">
+          {userAvatarUrl ? (
+            <img src={userAvatarUrl} alt="你" className="w-9 h-9 rounded-full shadow-sm" />
+          ) : (
+            <div className="w-9 h-9 rounded-full bg-purple-600 text-white text-sm flex items-center justify-center shadow-sm">你</div>
+          )}
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = () => {
+                const url = String(reader.result || '');
+                try { localStorage.setItem('userAvatarUrl', url); } catch {}
+                // 立即让父组件更新本地状态
+                if (onUserAvatarChange) {
+                  onUserAvatarChange(url);
+                }
+              };
+              reader.readAsDataURL(file);
+            }}
+          />
+        </label>
+      )}
     </div>
   );
 }
