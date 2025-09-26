@@ -47,11 +47,11 @@ export default function Home() {
   };
 
   return (
-    <div className="flex min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+    <div className="flex min-h-screen bg-purple-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
       <Sidebar selectedId={selectedId} onSelect={handleSelect} onCreate={handleCreate} onDelete={handleDelete} />
       <main className="flex-1 p-4 sm:p-8">
         <div className="flex justify-center items-center mb-6">
-          <h1 className="text-3xl sm:text-4xl font-bold text-center">数据分析代理</h1>
+          <h1 className="text-3xl sm:text-4xl font-bold text-center text-purple-700 dark:text-purple-300">数据分析代理</h1>
         </div>
         {selectedId ? (
           <ChatInterface key={selectedId} sessionId={selectedId} />

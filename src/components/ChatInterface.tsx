@@ -34,15 +34,25 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [useStreaming, setUseStreaming] = useState(true); // 默认启用流式处理
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasLoadedRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const retriedRef = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
   
   // 自动滚动到最新消息
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // 读取本地用户头像
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('userAvatarUrl');
+      if (saved) setUserAvatarUrl(saved);
+    } catch {}
+  }, []);
 
   // 从本地存储加载当前会话消息历史（含一次性重试）
   useEffect(() => {
@@ -170,6 +180,12 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
     storageQueue.enqueue(`chatMessages:${sessionId}`, messages)
       .then(success => {
         console.log(`[ChatInterface] 保存消息${success ? '成功' : '失败'}, sessionId: ${sessionId}`);
+        try {
+          // 在同标签页内主动广播更新，驱动侧边栏即时刷新
+          window.dispatchEvent(new CustomEvent('chat-messages-updated', {
+            detail: { sessionId, messages }
+          }));
+        } catch {}
       })
       .catch(err => console.error('[ChatInterface] 保存消息失败:', err));
 
@@ -384,7 +400,7 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
   };
 
   return (
-    <div className="flex flex-col h-[80vh] bg-white dark:bg-gray-800 rounded-lg shadow-md">
+    <div className="flex flex-col h-[80vh] bg-purple-50/70 dark:bg-gray-900 rounded-lg shadow-md">
       {/* 消息区域 */}
       <div className="flex-1 overflow-y-auto p-4">
         {messages.length === 0 ? (
@@ -394,7 +410,12 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
         ) : (
           <>
             {messages.map((msg, index) => (
-              <ChatMessage key={index} message={msg} />
+              <ChatMessage
+                key={index}
+                message={msg}
+                userAvatarUrl={userAvatarUrl || undefined}
+                onUserAvatarChange={(url) => setUserAvatarUrl(url)}
+              />
             ))}
           </>
         )}
@@ -402,10 +423,10 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
       </div>
       
       {/* 输入区域 */}
-      <form onSubmit={handleSubmit} className="border-t border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex items-center mb-2">
+      <form ref={formRef} onSubmit={handleSubmit} className="border-t border-purple-200 dark:border-gray-800 p-4 bg-purple-50/60 dark:bg-gray-900/60">
+        <div className="flex items-center mb-3">
           <label htmlFor="file-upload" className="cursor-pointer">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-500 hover:text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-purple-500 hover:text-purple-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
             </svg>
             <input
@@ -430,32 +451,38 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
           
           {/* 流式处理开关 */}
           <div className="ml-auto flex items-center">
-            <label className="text-sm text-gray-600 dark:text-gray-300 mr-2">
+            <label className="text-sm text-purple-700 dark:text-purple-300 mr-2">
               实时显示思考过程
             </label>
             <input
               type="checkbox"
               checked={useStreaming}
               onChange={(e) => setUseStreaming(e.target.checked)}
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+              className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-purple-300 rounded"
             />
           </div>
         </div>
         
-        <div className="flex">
-          <input
-            type="text"
+        <div className="relative">
+          <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="输入消息..."
-            className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-l-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            rows={3}
+            className="w-full resize-none pr-24 pl-4 py-3 border border-purple-300 dark:border-gray-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500 bg-white/90 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
             disabled={loading}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                formRef.current?.requestSubmit();
+              }
+            }}
           />
           <button
             type="submit"
             disabled={loading}
-            className={`px-4 py-2 rounded-r-md text-white ${
-              loading ? "bg-blue-400" : "bg-blue-600 hover:bg-blue-700"
+            className={`absolute bottom-2 right-1 px-4 py-2 rounded-lg text-white shadow ${
+              loading ? 'bg-purple-400' : 'bg-purple-600 hover:bg-purple-700'
             }`}
           >
             {loading ? (
@@ -464,7 +491,7 @@ export default function ChatInterface({ initialMessages = [], sessionId }: ChatI
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
             ) : (
-              "发送"
+              '发送'
             )}
           </button>
         </div>
