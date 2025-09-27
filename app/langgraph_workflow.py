@@ -230,19 +230,63 @@ def react_agent_node(state: AgentState) -> AgentState:
                 else:
                     action_input = {"code": action_input_text.strip()}
             else:
-                # 尝试从 "code": "..." 结构中用正则宽松提取，支持换行
+                # 优先尝试直接解析整个输入
                 try:
-                    m = re.search(r'"code"\s*:\s*"([\s\S]*?)"\s*\}?\s*$', action_input_text)
-                    if m:
-                        raw = m.group(1)
-                        # 处理常见转义
-                        raw = raw.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r').replace('\\"', '"')
-                        action_input = {"code": raw}
+                    # 尝试直接解析提取到的输入作为JSON
+                    action_data = json.loads(action_input_text)
+                    code_to_execute = action_data.get("code", "")
+                    
+                    if not code_to_execute:
+                        # 如果解析成功但没有code字段，可以当作失败处理
+                        raise ValueError("JSON parsed but 'code' key not found or empty.")
+                    action_input = {"code": code_to_execute}
+                    
+                except (json.JSONDecodeError, ValueError):
+                    # 如果直接解析失败，尝试使用正则表达式提取JSON部分
+                    logger.debug("--- Direct JSON parsing failed, falling back to regex extraction ---")
+                    # 尝试找到一个以{开头并以}结尾的块
+                    json_match = re.search(r'\{[\s\S]*\}', action_input_text)
+                    
+                    if json_match:
+                        json_string = json_match.group(0)
+                        try:
+                            action_data = json.loads(json_string)
+                            code_to_execute = action_data.get("code", "")
+                            if code_to_execute:
+                                action_input = {"code": code_to_execute}
+                            else:
+                                # 如果提取出的JSON没有code字段，回退到原有的正则提取
+                                raise ValueError("Extracted JSON has no 'code' field")
+                        except (json.JSONDecodeError, ValueError):
+                            # 如果提取出的部分仍然无法解析，使用原有的正则提取方法
+                            logger.debug("--- Regex extracted part is not valid JSON, using original regex method ---")
+                            try:
+                                m = re.search(r'"code"\s*:\s*"([\s\S]*?)"\s*\}?\s*$', action_input_text)
+                                if m:
+                                    raw = m.group(1)
+                                    # 处理常见转义
+                                    raw = raw.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r').replace('\\"', '"')
+                                    action_input = {"code": raw}
+                                else:
+                                    # 最后退路：直接使用全文
+                                    action_input = {"code": action_input_text.strip()}
+                            except Exception:
+                                action_input = {"code": action_input_text.strip()}
                     else:
-                        # 退路：直接使用全文
-                        action_input = {"code": action_input_text.strip()}
-                except Exception:
-                    action_input = {"code": action_input_text.strip()}
+                        # 如果连JSON块都找不到，使用原有的正则提取方法
+                        logger.debug("--- No JSON block found, using original regex method ---")
+                        try:
+                            m = re.search(r'"code"\s*:\s*"([\s\S]*?)"\s*\}?\s*$', action_input_text)
+                            if m:
+                                raw = m.group(1)
+                                # 处理常见转义
+                                raw = raw.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r').replace('\\"', '"')
+                                action_input = {"code": raw}
+                            else:
+                                # 退路：直接使用全文
+                                action_input = {"code": action_input_text.strip()}
+                        except Exception:
+                            action_input = {"code": action_input_text.strip()}
         else:
             # 非代码执行操作，尝试解析JSON（宽松清理控制符）
             try:

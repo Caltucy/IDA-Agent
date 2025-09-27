@@ -5,7 +5,7 @@ import os
 import json
 from typing import Optional
 import tempfile
-from .langgraph_workflow import process_query, process_query_streaming
+from langgraph_workflow import process_query, process_query_streaming
 import time
 
 app = FastAPI()

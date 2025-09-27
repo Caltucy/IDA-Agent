@@ -365,7 +365,7 @@ async def save_uploaded_file(file: cl.File) -> str:
             raise ValueError(f"文件 '{file.name}' 大小为0字节，请确保文件包含数据")
         
         # 确保 data 目录存在
-        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        data_dir = os.path.join(os.path.dirname(__file__), 'data')
         os.makedirs(data_dir, exist_ok=True)
 
         # 生成唯一文件名
@@ -410,7 +410,7 @@ async def save_uploaded_file(file: cl.File) -> str:
             raise ValueError(f"文件 '{file.name}' 内容为空")
         
         # 确保 data 目录存在
-        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        data_dir = os.path.join(os.path.dirname(__file__), 'data')
         os.makedirs(data_dir, exist_ok=True)
 
         # 生成唯一文件名
