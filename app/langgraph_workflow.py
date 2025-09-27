@@ -146,36 +146,48 @@ def react_agent_node(state: AgentState) -> AgentState:
     
     # 构建系统提示
     system_prompt = f"""你是一个数据分析助手，使用ReAct（思考-行动）方法解决问题。
-你可以使用以下工具:
+你可以使用以下工具，但每次只可选其一:
 1. generate_code: 生成Python代码来分析或处理数据
 2. execute_code: 执行生成的代码并获取结果
-3. final_answer: 提供最终答案，结束对话
+3. final_answer: 生成最终回复内容并结束对话
 
 {file_info if file_info else ""}
 
 {steps_history if steps_history else ""}
 
 按照以下格式回应:
-思考: 分析问题并思考解决方案
+思考: 分析问题并根据当前进度，给出下一步行动与行动输入。
 行动: [工具名称]
 行动输入: {{
-  "code": "要执行的Python代码" // 如果使用generate_code或execute_code
-  "answer": "最终答案" // 如果使用final_answer
+  "code": "要执行的Python代码", // 当且仅当采用generate_code或execute_code时包含该字段
+  "answer": "最终答案", // 当且仅当采用final_answer时包含该字段
 }}
 
 当你有足够信息回答用户问题时，使用final_answer工具。
-\n代码生成要求:\n- 使用 pandas/numpy 等库处理数据时，务必使用 print 打印关键结果。\n- 打印表格/序列前，设置完整显示选项: \n  pandas: display.max_rows=None, display.max_columns=None, display.max_colwidth=None, display.width=None。\n- DataFrame/Series 请优先使用 to_string() 打印完整内容。\n- numpy 如需打印数组，可设置 threshold/edgeitems 放宽显示限制。\n- 如果读取了文件，请使用 state 中提供的路径，避免硬编码其它路径。\n- 确保代码可独立运行，不依赖交互输入。\n"""
+\n代码生成要求:
+- 使用 pandas/numpy 等库处理数据时，务必使用 print 打印关键结果。
+- 打印表格/序列前，设置完整显示选项: 
+  - DataFrame/Series 请优先使用 to_string() 打印完整内容。
+  - numpy 如需打印数组，可设置 threshold/edgeitems 放宽显示限制。
+  - 如果读取了文件，请使用 state 中提供的路径，避免硬编码其它路径。
+  - 确保代码可独立运行，不依赖交互输入。
+- 当你需要生成图表、绘图或任何视觉化结果时，你必须严格遵循以下规则：
+  - 禁止直接显示：绝对禁止调用 plt.show() 或任何其他试图打开图形界面的函数。你的运行环境是无界面的服务器。
+  - 保存为文件：你必须将图表保存为 PNG 格式的图片文件。文件名必须保证全局唯一性。
+  - 保存位置：图表文件必须保存到项目根目录下的 data/plots 目录中。你可以通过环境变量 PROJECT_ROOT 获取项目根目录路径。
+  - 中文字体：使用中文时，必须设置微软雅黑字体：`plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']`，`plt.rcParams['axes.unicode_minus'] = False`
+  - 打印访问路径：文件保存成功后，你必须立即关闭图表 (plt.close()) 以释放内存，然后以 PLOT_PATH::./data/plots/你的唯一文件名.png 的精确格式，打印出该图片的路径。"""
 
     # 追加更严格的分析准则，避免对年份/时间/编号做不必要的统计
-    system_prompt += (
-        "\n分析准则（务必遵守）：\n"
-        "1) 先用 df.head(2)、df.columns、df.dtypes 检查列名与类型，再决定分析方案。\n"
-        "2) 默认不对‘年份/时间/编号类’字段做均值/标准差统计。以下模式视为时间/编号：列名含 year/date/time/日期/时间/年；或纯整数且取值范围像年份（1800-2100）；或列名含 id/code/编号。\n"
-        "   - 对这类列，如需汇总仅给出唯一值个数、最小/最大值或时间范围；除非用户明确要求，否则不要把它们并入整体 describe 结果。\n"
-        "3) 仅对与‘面积/数量/金额/比率/变化’等度量相关的数值列做统计；必要时将可解析文本列转为数值（pd.to_numeric(errors='coerce')）。\n"
-        "4) 猜列名前先打印候选列并说明选择依据，再进行计算。\n"
-        "5) 输出围绕洞见（趋势、异常、对比）；表格过长时先展示示例并在总结中归纳结论。\n"
-    )
+    # system_prompt += (
+    #     "\n分析准则（务必遵守）：\n"
+    #     "1) 先用 df.head(2)、df.columns、df.dtypes 检查列名与类型，再决定分析方案。\n"
+    #     "2) 默认不对‘年份/时间/编号类’字段做均值/标准差统计。以下模式视为时间/编号：列名含 year/date/time/日期/时间/年；或纯整数且取值范围像年份（1800-2100）；或列名含 id/code/编号。\n"
+    #     "   - 对这类列，如需汇总仅给出唯一值个数、最小/最大值或时间范围；除非用户明确要求，否则不要把它们并入整体 describe 结果。\n"
+    #     "3) 仅对与‘面积/数量/金额/比率/变化’等度量相关的数值列做统计；必要时将可解析文本列转为数值（pd.to_numeric(errors='coerce')）。\n"
+    #     "4) 猜列名前先打印候选列并说明选择依据，再进行计算。\n"
+    #     "5) 输出围绕洞见（趋势、异常、对比）；表格过长时先展示示例并在总结中归纳结论。\n"
+    # )
     
     # 添加系统消息（使用正确的消息类型）
     messages.insert(0, SystemMessage(content=system_prompt))
@@ -219,74 +231,25 @@ def react_agent_node(state: AgentState) -> AgentState:
         )
 
         if is_code_action:
-            # 优先处理 ```python 代码块
-            code_start = action_input_text.find("```python")
-            if code_start >= 0:
-                code_start += 9
-                code_end = action_input_text.find("```", code_start)
-                if code_end > code_start:
-                    code = action_input_text[code_start:code_end].strip()
-                    action_input = {"code": code}
-                else:
-                    action_input = {"code": action_input_text.strip()}
-            else:
-                # 优先尝试直接解析整个输入
-                try:
-                    # 尝试直接解析提取到的输入作为JSON
-                    action_data = json.loads(action_input_text)
-                    code_to_execute = action_data.get("code", "")
-                    
-                    if not code_to_execute:
-                        # 如果解析成功但没有code字段，可以当作失败处理
-                        raise ValueError("JSON parsed but 'code' key not found or empty.")
+            # 只使用JSON解析方式提取代码
+            print("------------------------------")
+            print(f"原始行动输入文本: {action_input_text}")
+            print("------------------------------")
+            try:
+                # 尝试直接解析提取到的输入作为JSON
+                action_data = json.loads(action_input_text)
+                code_to_execute = action_data.get("code", "")
+                
+                if code_to_execute:
                     action_input = {"code": code_to_execute}
-                    
-                except (json.JSONDecodeError, ValueError):
-                    # 如果直接解析失败，尝试使用正则表达式提取JSON部分
-                    logger.debug("--- Direct JSON parsing failed, falling back to regex extraction ---")
-                    # 尝试找到一个以{开头并以}结尾的块
-                    json_match = re.search(r'\{[\s\S]*\}', action_input_text)
-                    
-                    if json_match:
-                        json_string = json_match.group(0)
-                        try:
-                            action_data = json.loads(json_string)
-                            code_to_execute = action_data.get("code", "")
-                            if code_to_execute:
-                                action_input = {"code": code_to_execute}
-                            else:
-                                # 如果提取出的JSON没有code字段，回退到原有的正则提取
-                                raise ValueError("Extracted JSON has no 'code' field")
-                        except (json.JSONDecodeError, ValueError):
-                            # 如果提取出的部分仍然无法解析，使用原有的正则提取方法
-                            logger.debug("--- Regex extracted part is not valid JSON, using original regex method ---")
-                            try:
-                                m = re.search(r'"code"\s*:\s*"([\s\S]*?)"\s*\}?\s*$', action_input_text)
-                                if m:
-                                    raw = m.group(1)
-                                    # 处理常见转义
-                                    raw = raw.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r').replace('\\"', '"')
-                                    action_input = {"code": raw}
-                                else:
-                                    # 最后退路：直接使用全文
-                                    action_input = {"code": action_input_text.strip()}
-                            except Exception:
-                                action_input = {"code": action_input_text.strip()}
-                    else:
-                        # 如果连JSON块都找不到，使用原有的正则提取方法
-                        logger.debug("--- No JSON block found, using original regex method ---")
-                        try:
-                            m = re.search(r'"code"\s*:\s*"([\s\S]*?)"\s*\}?\s*$', action_input_text)
-                            if m:
-                                raw = m.group(1)
-                                # 处理常见转义
-                                raw = raw.replace('\\n', '\n').replace('\\t', '\t').replace('\\r', '\r').replace('\\"', '"')
-                                action_input = {"code": raw}
-                            else:
-                                # 退路：直接使用全文
-                                action_input = {"code": action_input_text.strip()}
-                        except Exception:
-                            action_input = {"code": action_input_text.strip()}
+                else:
+                    # 如果解析成功但没有code字段，抛出错误
+                    raise ValueError("JSON parsed but 'code' key not found or empty.")
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                # 如果JSON解析失败，记录错误并抛出异常
+                logger.error(f"代码提取失败: {str(e)}")
+                raise ValueError(f"代码提取失败: {str(e)}")
         else:
             # 非代码执行操作，尝试解析JSON（宽松清理控制符）
             try:
@@ -324,10 +287,11 @@ def react_agent_node(state: AgentState) -> AgentState:
         code_preview = (action_input.get("code", "") if isinstance(action_input, dict) else "")
         logger.info(f"解析行动: action='{action}', 代码长度={len(code_preview)}")
     except Exception:
+        logger.info(f"解析行动输入失败: {action_input_text[:100]}...")
         pass
     
     # 检查是否完成或者没有行动（直接回复）
-    if (action and action.strip().lower() == "final_answer") or not action:
+    if (action and action.strip().lower() == "final_answer"):
         state["is_done"] = True
         
         # 如果是final_answer且有answer字段，使用answer作为回复
@@ -336,13 +300,13 @@ def react_agent_node(state: AgentState) -> AgentState:
             messages = list(state["messages"])
             messages.append(ai_message)
             state["messages"] = messages
-        # 如果没有行动，直接使用LLM的回复作为最终回复
-        elif not action:
-            ai_message = AIMessage(content=response_content)
-            messages = list(state["messages"])
-            messages.append(ai_message)
-            state["messages"] = messages
-    
+    # 如果没有行动，直接使用LLM的回复作为最终回复
+    if not action:
+        ai_message = AIMessage(content=response_content)
+        messages = list(state["messages"])
+        messages.append(ai_message)
+        state["messages"] = messages
+
     return state
 # 已在文件顶部初始化过 llm，这里移除重复定义
 
@@ -370,17 +334,6 @@ def agent_node(state: AgentState) -> AgentState:
         "messages": messages + [response]
     }
 
-def should_generate_code(state: AgentState) -> str:
-    """决定是否需要生成代码"""
-    last_message = state["messages"][-1]
-    content = last_message.content.lower()
-    
-    # 简单的判断逻辑，实际应用中可能需要更复杂的分析
-    if "生成代码" in content or "写代码" in content or "代码示例" in content:
-        return "generateCode"
-    else:
-        return "reply"
-
 def generate_code_node(state: AgentState) -> AgentState:
     """生成代码节点"""
     action_input = state.get("action_input", {})
@@ -406,6 +359,12 @@ def safe_code_executor(code: str, _locals: dict[str, Any]) -> tuple[str, dict[st
     temp_dir = tempfile.mkdtemp()
     logger.info(f"创建临时目录: {temp_dir}")
     
+    # 确保项目根目录下的data/plots目录存在
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    plots_dir = os.path.join(project_root, "data", "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+    logger.info(f"确保项目plots目录存在: {plots_dir}")
+    
     try:
         # 存储执行前的变量键
         original_keys = set(_locals.keys())
@@ -425,6 +384,7 @@ def safe_code_executor(code: str, _locals: dict[str, Any]) -> tuple[str, dict[st
         # 设置环境变量
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        env["PROJECT_ROOT"] = project_root  # 添加项目根目录环境变量
         
         # 执行代码，设置超时
         try:
@@ -478,27 +438,6 @@ def execute_code_node(state: AgentState) -> AgentState:
         if state.get("intermediate_steps") and len(state["intermediate_steps"]) > 0:
             state["intermediate_steps"][-1]["observation"] = "错误：没有代码可执行"
         return state
-    
-    # 如果代码未显式打印结果，尝试为常见结果变量补充打印
-    try:
-        code_str = str(code)
-        needs_print = ("print(" not in code_str)
-        if needs_print:
-            candidate_vars = ["summary", "result", "results", "output"]
-            chosen = None
-            for var in candidate_vars:
-                # 粗略判断变量是否在代码中被赋值或使用
-                if re.search(rf"\b{var}\b", code_str):
-                    chosen = var
-                    break
-            if chosen:
-                code_str += f"\nprint({chosen})\n"
-            else:
-                code_str += "\nprint(\"代码已执行，无输出（未检测到可打印变量）\")\n"
-            state["code_to_execute"] = code_str
-    except Exception as _e:
-        # 不中断执行，按原代码继续
-        pass
 
     # 使用安全沙箱执行代码
     execution_result, new_vars = safe_code_executor(state.get("code_to_execute") or code, state)
@@ -507,6 +446,7 @@ def execute_code_node(state: AgentState) -> AgentState:
     state["execution_result"] = execution_result
     if state.get("intermediate_steps") and len(state["intermediate_steps"]) > 0:
         state["intermediate_steps"][-1]["observation"] = execution_result
+    state["code_to_execute"] = None
     
     # 将新变量添加到状态中
     for key, value in new_vars.items():
