@@ -40,7 +40,7 @@ def install_dependencies():
 def setup_environment():
     """设置环境变量"""
     # 确保 data 目录存在
-    data_dir = Path(__file__).parent.parent / "data"
+    data_dir = Path(__file__).parent / "data"
     data_dir.mkdir(exist_ok=True)
     logger.info(f"📁 数据目录: {data_dir}")
     
