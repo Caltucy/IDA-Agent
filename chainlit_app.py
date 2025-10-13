@@ -286,7 +286,8 @@ async def on_message(message: cl.Message):
                 
                 # 显示最终答案
                 final_response = chunk.get("content", "")
-                await cl.Message(content=final_response).send()
+                # await cl.Message(content=final_response).send()
+                await send_message_with_images(final_response)
                 break
                 
             elif chunk_type == "error":
@@ -441,6 +442,61 @@ async def save_uploaded_file(file: cl.File) -> str:
         logger.error(f"无法获取文件内容，文件对象缺少path和content属性")
         raise ValueError(f"文件 '{file.name}' 无法访问，请检查Chainlit配置或尝试重新上传")
 
+async def send_message_with_images(finalResponse: str) -> bool:
+    """
+    用于前端显示的文本处理。
+    该函数会解析包含Markdown图片格式的字符串，
+    并将其拆分为文本和图片消息，然后交错发送至前端，
+    以实现"文字-图片-文字-图片"的显示效果。
+
+    :param finalResponse: 包含Markdown图片链接的字符串。
+    :return: bool, 表示是否发送成功。
+    """
+    try:
+        # 用于匹配Markdown图片语法 ![alt text](path) 的正则表达式
+        # (.*?) 是一个非贪婪捕获组，用于提取括号内的图片路径
+        pattern = r'!\[.*?\]\((.*?)\)'
+
+        # 使用正则表达式分割字符串。
+        # 分割后会得到一个列表，其中偶数索引为文本，奇数索引为图片路径
+        # 例如: "text1 ![img](./cat.jpeg) text2" -> ['text1 ', './cat.jpeg', ' text2']
+        parts = re.split(pattern, finalResponse)
+
+        # 遍历分割后的部分
+        for i, part in enumerate(parts):
+            # 索引为偶数的是文本部分
+            if i % 2 == 0:
+                # 如果文本部分不为空白，则发送文本消息
+                if part and part.strip():
+                    await cl.Message(content=part.strip()).send()
+            # 索引为奇数的是图片路径
+            else:
+                image_path = part.strip()
+                # 检查图片文件是否存在
+                if os.path.exists(image_path):
+                    # 提取文件名作为图片的name
+                    image_name = os.path.basename(image_path)
+                    
+                    # 创建图片元素
+                    image = cl.Image(path=image_path, name=image_name, display="inline")
+                    
+                    # 发送图片消息，可以附带空文本
+                    await cl.Message(
+                        content="",  # 发送空内容以避免多余的文本
+                        elements=[image],
+                    ).send()
+                else:
+                    # 如果图片不存在，可以发送一条错误提示
+                    # debug
+                    error_msg = f"--- 图片未找到: {image_path} ---"
+                    await cl.Message(content=error_msg).send()
+        
+        return True
+
+    except Exception as e:
+        logger.error(f"发送图文混合消息失败: {e}")
+        return False
+        
 # ==================== 程序入口点 ====================
 
 if __name__ == "__main__":
