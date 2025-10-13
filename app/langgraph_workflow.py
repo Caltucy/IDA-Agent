@@ -154,9 +154,8 @@ def react_agent_node(state: AgentState) -> AgentState:
 
 {steps_history if steps_history else ""}
 
-你必须严格按照以下JSON格式进行回应，不要包含任何额外的解释或Markdown标记。
-
-响应格式:
+你必须严格按照以下JSON格式进行回应：
+'''
 {{
   "thought": "在这里分析问题，制定计划，并反思。",
   "action": {{
@@ -167,7 +166,7 @@ def react_agent_node(state: AgentState) -> AgentState:
     }}
   }}
 }}
-
+'''
 请注意：
 - `action.input` 对象中，`code` 和 `answer` 字段是互斥的，根据 `action.name` 的值只提供其中一个。
 - 你的整个输出必须是一个可以被 `json.loads()` 解析的、单一的、合法的JSON对象。

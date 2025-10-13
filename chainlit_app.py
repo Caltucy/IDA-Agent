@@ -10,6 +10,7 @@ IDA Agent - 智能数据分析助手
 """
 
 import os
+import re
 import logging
 from typing import Dict, List, Optional, Any
 import chainlit as cl
@@ -496,7 +497,7 @@ async def send_message_with_images(finalResponse: str) -> bool:
     except Exception as e:
         logger.error(f"发送图文混合消息失败: {e}")
         return False
-        
+
 # ==================== 程序入口点 ====================
 
 if __name__ == "__main__":
