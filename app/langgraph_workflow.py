@@ -34,7 +34,7 @@ class AgentState(TypedDict):
     current_step: int
     max_iterations: int
     action: Optional[str]
-    action_input: Optional[Dict[str, Any]]
+    action_input: Optional[Union[Dict[str, Any], str]]
     observation: Optional[str]
     is_done: bool
 
@@ -42,8 +42,12 @@ class AgentState(TypedDict):
 llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL_NAME", "gpt-4o"), temperature=0)
 
 # 定义工具函数
-def read_file_content(file_path):
-    """读取文件内容：二进制类型直接按二进制返回长度，其它尝试多种编码"""
+def read_file_content(
+    file_path: str,
+    max_preview_lines: int = 10,
+    max_preview_chars: int = 4000,
+) -> str:
+    """Read file content preview: binary files report length, text files return truncated preview."""
     binary_exts = {'.xlsx', '.xls', '.xlsb', '.xlsm', '.parquet', '.feather'}
     try:
         ext = os.path.splitext(file_path)[1].lower()
@@ -54,34 +58,74 @@ def read_file_content(file_path):
         try:
             with open(file_path, 'rb') as f:
                 data = f.read()
-            logger.info(f"以二进制方式读取文件: {file_path}")
-            return f"[二进制文件，长度: {len(data)} 字节]"
+            logger.info(f"Read binary file: {file_path}")
+            return f"[binary file, length: {len(data)} bytes]"
         except Exception as e:
-            logger.error(f"读取二进制文件失败: {e}")
-            return f"读取文件失败: {e}"
+            logger.error(f"Failed to read binary file: {e}")
+            return f"Failed to read file: {e}"
 
     encodings = ['utf-8', 'gbk', 'cp936', 'gb18030', 'latin1']
     for encoding in encodings:
         try:
             with open(file_path, 'r', encoding=encoding) as file:
-                content = file.read()
-            logger.info(f"成功使用 {encoding} 编码读取文件: {file_path}")
-            return content
+                content_parts: List[str] = []
+                total_chars = 0
+                line_count = 0
+                line_limit_reached = False
+                char_limit_reached = False
+
+                while True:
+                    line = file.readline()
+                    if line == '':
+                        break
+
+                    content_parts.append(line)
+                    total_chars += len(line)
+                    line_count += 1
+
+                    if total_chars >= max_preview_chars:
+                        char_limit_reached = True
+                        break
+                    if line_count >= max_preview_lines:
+                        line_limit_reached = True
+                        break
+
+                truncated = False
+                if char_limit_reached:
+                    truncated = True
+                elif line_limit_reached:
+                    extra = file.read(1)
+                    if extra:
+                        truncated = True
+
+                preview = ''.join(content_parts)
+                if len(preview) > max_preview_chars:
+                    preview = preview[:max_preview_chars]
+                    truncated = True
+
+                if truncated:
+                    preview = preview[:max_preview_chars].rstrip('\n')
+                    preview += f"\n... (preview truncated to {line_count} lines and approximately {len(preview)} characters)"
+
+                logger.info(
+                    f"Loaded preview with encoding {encoding}: {file_path} (lines: {line_count}, chars: {len(preview)})"
+                )
+                return preview
         except UnicodeDecodeError:
             continue
         except Exception as e:
-            logger.error(f"读取文件失败: {e}")
-            return f"读取文件失败: {e}"
-    
-    # 如果所有编码都失败，尝试以二进制方式读取
+            logger.error(f"Failed to read file: {e}")
+            return f"Failed to read file: {e}"
+
+    # If all encodings fail, fall back to binary read
     try:
         with open(file_path, 'rb') as file:
             binary_content = file.read()
-        logger.warning(f"以二进制方式读取文件: {file_path}")
-        return f"[二进制文件，长度: {len(binary_content)} 字节]"
+        logger.warning(f"Fallback to binary read: {file_path}")
+        return f"[binary file, length: {len(binary_content)} bytes]"
     except Exception as e:
-        logger.error(f"读取文件失败: {e}")
-        return f"读取文件失败: {e}"
+        logger.error(f"Failed to read file: {e}")
+        return f"Failed to read file: {e}"
 
 def detect_file_type(file_path):
     """检测文件类型"""
@@ -139,10 +183,17 @@ def react_agent_node(state: AgentState) -> AgentState:
         for i, step in enumerate(state["intermediate_steps"]):
             thought = step.get("thought", "")
             action = step.get("action", "")
-            action_input = step.get("action_input", {})
+            action_input = step.get("action_input")
             observation = step.get("observation", "")
-            
-            steps_history += f"步骤 {i+1}:\n思考: {thought}\n行动: {action}\n行动输入: {json.dumps(action_input, ensure_ascii=False)}\n观察: {observation}\n\n"
+
+            if isinstance(action_input, dict):
+                action_input_str = json.dumps(action_input, ensure_ascii=False)
+            elif action_input is None:
+                action_input_str = ""
+            else:
+                action_input_str = str(action_input)
+
+            steps_history += f"步骤 {i+1}:\n思考: {thought}\n行动: {action}\n行动输入: {action_input_str}\n观察: {observation}\n\n"
     
     # 构建系统提示
     system_prompt = f"""你是一个数据分析助手，使用ReAct（思考-行动）方法解决问题。
@@ -160,15 +211,12 @@ def react_agent_node(state: AgentState) -> AgentState:
   "thought": "在这里分析问题，制定计划，并反思。",
   "action": {{
     "name": "行动名称（execute_code 或 final_answer）",
-    "input": {{
-      "code": "仅当行动名称为 'execute_code' 时，在此处生成要执行的Python代码。",
-      "answer": "仅当行动名称为 'final_answer' 时，当你有足够信息回答用户问题时，在此处提供最终的文字答案。"
-    }}
+    "input": "仅当行动名称为 'execute_code' 时，在此处生成要执行的Python代码；仅当行动名称为 'final_answer' 时，当你有足够信息回答用户问题时，在此处提供最终的文字答案。"
   }}
 }}
 '''
 请注意：
-- `action.input` 对象中，`code` 和 `answer` 字段是互斥的，根据 `action.name` 的值只提供其中一个。
+- `action.input` 对象中，必须根据 `action.name` 的值提供代码或者回复内容。
 - 你的整个输出必须是一个可以被 `json.loads()` 解析的、单一的、合法的JSON对象。
 
 \n代码生成要求:
@@ -210,12 +258,16 @@ def react_agent_node(state: AgentState) -> AgentState:
         thought = response_data.get("thought", "")
         action_obj = response_data.get("action", {})
         action = action_obj.get("name", "")
-        action_input = action_obj.get("input", {})
+        action_input = action_obj.get("input")
 
         # 兼容旧逻辑，判断是否为代码执行或最终答案
         normalized_action = (action or "").lower()
-        is_code_action = normalized_action == "execute_code"
-        is_final_answer = normalized_action == "final_answer" or (isinstance(action_input, dict) and "answer" in action_input and not action)
+        if not normalized_action and isinstance(action_input, dict):
+            if "code" in action_input:
+                normalized_action = "execute_code"
+            elif "answer" in action_input:
+                normalized_action = "final_answer"
+        is_final_answer = normalized_action == "final_answer"
 
         # 状态记录
         current_step = state.get("current_step", 0) + 1
@@ -237,16 +289,33 @@ def react_agent_node(state: AgentState) -> AgentState:
         # 终止判断
         if is_final_answer:
             state["is_done"] = True
-            if "answer" in action_input:
-                ai_message = AIMessage(content=action_input["answer"])
+            if isinstance(action_input, str):
+                answer_text = action_input
+            elif isinstance(action_input, dict):
+                answer_text = action_input.get("answer", "")
+            else:
+                answer_text = ""
+
+            if answer_text:
+                ai_message = AIMessage(content=answer_text)
                 messages = list(state["messages"])
                 messages.append(ai_message)
                 state["messages"] = messages
-        elif not action and isinstance(action_input, dict) and "answer" in action_input:
-            ai_message = AIMessage(content=action_input["answer"])
-            messages = list(state["messages"])
-            messages.append(ai_message)
-            state["messages"] = messages
+                state["final_answer"] = answer_text
+        elif not action:
+            if isinstance(action_input, str):
+                answer_text = action_input
+            elif isinstance(action_input, dict):
+                answer_text = action_input.get("answer", "")
+            else:
+                answer_text = ""
+
+            if answer_text:
+                ai_message = AIMessage(content=answer_text)
+                messages = list(state["messages"])
+                messages.append(ai_message)
+                state["messages"] = messages
+                state["final_answer"] = answer_text
 
     except Exception as e:
         logger.error(f"解析大模型JSON回复失败: {e}，原始内容: {response_content[:100]}...")
@@ -386,8 +455,13 @@ def execute_code_node(state: AgentState) -> AgentState:
 
 def final_answer_node(state: AgentState) -> AgentState:
     """生成最终回答"""
-    action_input = state.get("action_input", {})
-    answer = action_input.get("answer", "")
+    action_input = state.get("action_input")
+    if isinstance(action_input, str):
+        answer = action_input
+    elif isinstance(action_input, dict):
+        answer = action_input.get("answer", "")
+    else:
+        answer = ""
     
     if answer:
         # 创建AI消息
@@ -610,10 +684,17 @@ async def process_query_streaming(instruction: str, file_path: Optional[str] = N
                     break
 
             # 2.1) 最终回答
+            if isinstance(action_input, str):
+                answer_candidate = action_input.strip()
+            elif isinstance(action_input, dict):
+                answer_candidate = action_input.get("answer", "")
+            else:
+                answer_candidate = ""
+
             is_final_answer = (
                 (normalized_action == "final_answer") or
                 ("final_answer" in action_text) or
-                (isinstance(action_input, dict) and "answer" in action_input and (not action_text or action_text in ["无", "none"]))
+                (not action_text and answer_candidate)
             )
             if is_final_answer:
                 state = final_answer_node(state)
@@ -652,7 +733,12 @@ async def process_query_streaming(instruction: str, file_path: Optional[str] = N
             # 2.2) 只保留 execute_code 相关判断
             if ("执行代码" in action_text) or (normalized_action in ("execute_code",)) or ("execute_code" in action_text):
                 # 流式显示代码执行开始
-                code = action_input.get("code") if isinstance(action_input, dict) else None
+                if isinstance(action_input, str):
+                    code = action_input
+                elif isinstance(action_input, dict):
+                    code = action_input.get("code")
+                else:
+                    code = None
                 if code:
                     state["code_to_execute"] = code
                     print(f"----------\n{code}\n----------")
